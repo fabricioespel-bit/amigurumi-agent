@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product for my wife, who makes amigurumi (crochet dolls), and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phase 2 of 6 is complete — domain research (interviews + curated construction rules from real, purchased patterns) and the LangGraph generator module. Vector search (Qdrant), observability (Langfuse) and the React front-end are designed but not yet built.
+**Status: in progress.** Phases 0–3 of 6 are complete — domain research, the LangGraph generator module (Module A), a working React front-end consuming it end-to-end, and LLM observability via Langfuse. Vector search (Qdrant) and the RAG-based project assistant (Module B) are in progress.
 
 ## Architecture
 
@@ -21,9 +21,13 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 
-### Module B — Project Assistant (planned)
+### Module B — Project Assistant (in progress)
 
-RAG over a curated corpus of crochet techniques (text + reference diagrams, retrieved via hybrid dense+keyword search with reranking) in Qdrant, plus deterministic tools for yarn calculation and pattern scaling.
+RAG over a curated corpus of crochet techniques (text + reference diagrams, retrieved via hybrid dense+keyword search with reranking) in Qdrant, plus deterministic tools for yarn calculation and pattern scaling. Embeddings via Voyage AI (Anthropic's recommended pairing, since Claude has no native embedding endpoint), Qdrant self-hosted via Docker.
+
+### Observability (Langfuse)
+
+Every node in the LangGraph — including the deterministic ones, not just the LLM calls — is traced automatically: Langfuse's LangChain callback handler is injected once into the graph's invoke config, and LangGraph propagates it to every node without any per-node instrumentation. One non-obvious finding from wiring this up: a human-in-the-loop pause (`intake_parser` → `clarify_with_user` → resume) produces two separate LangGraph invocations, so by default it showed up as two disconnected traces. Fixed by passing the same LangGraph thread ID as `metadata.langfuse_session_id`, which groups both traces — pre-pause and post-resume — under one Langfuse session with aggregated cost.
 
 ## Key Design Decisions
 
@@ -44,18 +48,21 @@ When the body family (legs visible vs. a cone-shaped robe) can't be inferred con
 ```
 backend/
   app/
-    main.py                    # FastAPI entrypoint
+    main.py                    # FastAPI entrypoint — CORS, Langfuse callback wiring
     graphs/
       pattern_generator.py     # Module A — LangGraph StateGraph
-      assistant.py             # Module B — planned
+      assistant.py             # Module B — in progress
     knowledge/
       construction_rules.py    # deterministic crochet construction rules
-    rag/                       # planned — Qdrant ingestion + retrieval
+    rag/                       # in progress — Qdrant ingestion + retrieval
     tools/                     # planned — yarn_calculator, pattern_scaler
-    observability/             # planned — Langfuse tracing
     models/                    # Pydantic schemas (spec, pattern)
   langgraph.json                # LangGraph Studio config
-frontend/                       # planned — Vite + React + TypeScript
+frontend/
+  src/
+    api/client.ts              # fetch calls to the backend
+    pages/GeneratorPage.tsx    # form, human-in-the-loop UI, recipe display
+    types.ts                   # TypeScript mirrors of the backend Pydantic models
 docs/
   regras-construcao-amigurumi.md   # curated domain knowledge base
 ```
@@ -65,10 +72,11 @@ docs/
 - **LLM:** Claude (Anthropic), via `langchain-anthropic`
 - **Orchestration:** LangGraph — `StateGraph`, conditional edges, `interrupt()` human-in-the-loop
 - **Backend:** FastAPI · Python · uv
+- **Observability:** Langfuse (Cloud) — per-node tracing, cost/latency, session-linked human-in-the-loop
+- **Frontend:** Vite · React · TypeScript
 - **Dev tooling:** LangGraph Studio (local graph debugging)
-- **Vector DB (planned):** Qdrant
-- **Observability (planned):** Langfuse
-- **Frontend (planned):** Vite · React · TypeScript
+- **Vector DB (in progress):** Qdrant, self-hosted via Docker
+- **Embeddings (in progress):** Voyage AI
 - **Deployment (planned):** Cloud Run · Docker
 
 ## Related Projects
