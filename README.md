@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product for my wife, who makes amigurumi (crochet dolls), and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phases 0–3 of 6 are complete — domain research, the LangGraph generator module (Module A), a working React front-end consuming it end-to-end, and LLM observability via Langfuse. Vector search (Qdrant) and the RAG-based project assistant (Module B) are in progress.
+**Status: in progress.** Phases 0–3 of 6 are complete — domain research, the LangGraph generator module (Module A), a working React front-end consuming it end-to-end, and LLM observability via Langfuse. Phase 4 (Module B) is underway: the RAG corpus, ingestion, and hybrid retrieval are built and tested; the conversational graph and deterministic tools (yarn calculator, pattern scaler) are next.
 
 ## Architecture
 
@@ -21,9 +21,9 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 
-### Module B — Project Assistant (in progress)
+### Module B — Project Assistant (retrieval built, conversation loop in progress)
 
-RAG over a curated corpus of crochet techniques (text + reference diagrams, retrieved via hybrid dense+keyword search with reranking) in Qdrant, plus deterministic tools for yarn calculation and pattern scaling. Embeddings via Voyage AI (Anthropic's recommended pairing, since Claude has no native embedding endpoint), Qdrant self-hosted via Docker.
+RAG over a curated corpus of crochet techniques (14 chunks, one per technique, manually split along the source document's own sections rather than by fixed size) in Qdrant Cloud, embedded via Voyage AI (Anthropic's recommended pairing, since Claude has no native embedding endpoint). Retrieval is genuinely hybrid: a dense vector search and a keyword match over chunk tags are merged and deduplicated, then reranked by Voyage's cross-encoder reranker — the vector search alone surfaces plausible-looking but not-quite-right chunks; reranking is what actually fixes the ordering. Reference diagrams per technique are planned but not yet sourced. The conversational graph and deterministic tools (yarn calculator, pattern scaler) are the remaining piece.
 
 ### Observability (Langfuse)
 
@@ -38,10 +38,16 @@ The stitch-count math the `validator` checks against is computed by plain Python
 The construction rules (stitch progressions, body-family branching, ear/hair technique variants) come from analyzing 11 real, purchased crochet patterns plus targeted public research — never reproduced verbatim, generalized into technique knowledge with provenance and confidence notes kept alongside the code.
 
 **The end user shaped the design, not just the LLM**
-An interview with the actual crocheter (a beginner, not an expert) changed concrete design decisions — most notably, that a recipe without a visual reference per technique isn't trusted by a beginner. That's why Module B's corpus pairs every technique with a diagram, and why the generator's output is structured explicitly by named body part instead of running text.
+An interview with the actual crocheter (a beginner, not an expert) changed concrete design decisions — most notably, that a recipe without a visual reference per technique isn't trusted by a beginner. That's why Module B's corpus schema carries an `image_url` per chunk (unfilled for now — sourcing real diagrams is separate work), and why the generator's output is structured explicitly by named body part instead of running text.
 
 **Human-in-the-loop as graph state, not a UI hack**
 When the body family (legs visible vs. a cone-shaped robe) can't be inferred confidently, the graph genuinely pauses mid-execution via LangGraph's `interrupt()` and checkpointer, rather than guessing or failing — tested end-to-end via LangGraph Studio and the real HTTP API.
+
+**Cloud over self-hosted, decided by hitting the wall, not by planning ahead**
+Both Langfuse and Qdrant were originally scoped as self-hosted (closer to the "operate the infra yourself" learning goal). Langfuse moved to Cloud because the self-hosted stack (Postgres+ClickHouse+Redis+MinIO) was disproportionate for a personal project. Qdrant moved to Cloud for a blunter reason: Docker Desktop no longer supports this machine's macOS version, and the lightweight alternative (Colima) failed to build its virtualization dependency on it too. Same conclusion reached two different ways — know when infra friction isn't the point of the exercise.
+
+**A production bug caught by reading the observability tool, not by guessing**
+A user report of a generic "failed to fetch" in the browser led nowhere by itself. Pulling the actual trace via Langfuse's API (not just its dashboard) showed exactly where it broke: Claude occasionally returns a structured-output field as a JSON-encoded string instead of a real list, which Pydantic rejects — an unhandled exception that took down the whole request. Fixed with a narrow `try/except` feeding the same retry path the validator already used, rather than a generic catch-all.
 
 ## Project Structure
 
@@ -54,7 +60,10 @@ backend/
       assistant.py             # Module B — in progress
     knowledge/
       construction_rules.py    # deterministic crochet construction rules
-    rag/                       # in progress — Qdrant ingestion + retrieval
+    rag/
+      corpus.py                # 14 curated technique chunks
+      ingest.py                # embeddings (Voyage) + upsert to Qdrant
+      retriever.py             # hybrid dense+keyword search with reranking
     tools/                     # planned — yarn_calculator, pattern_scaler
     models/                    # Pydantic schemas (spec, pattern)
   langgraph.json                # LangGraph Studio config
@@ -75,8 +84,8 @@ docs/
 - **Observability:** Langfuse (Cloud) — per-node tracing, cost/latency, session-linked human-in-the-loop
 - **Frontend:** Vite · React · TypeScript
 - **Dev tooling:** LangGraph Studio (local graph debugging)
-- **Vector DB (in progress):** Qdrant, self-hosted via Docker
-- **Embeddings (in progress):** Voyage AI
+- **Vector DB:** Qdrant (Cloud) — hybrid dense+keyword retrieval with reranking
+- **Embeddings/Reranking:** Voyage AI (`voyage-3`, `rerank-2`)
 - **Deployment (planned):** Cloud Run · Docker
 
 ## Related Projects
