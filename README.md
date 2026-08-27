@@ -13,6 +13,13 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
       │
       └─(high confidence)─→ shape_planner → pattern_writer → validator ─┬─(invalid)──→ pattern_writer
                                                                           └─(valid)────→ formatter
+                                                                                            │
+                                                    end ←─(done)── refine_with_user ←───────┘
+                                                                        │
+                                                                  (wants changes)
+                                                                        │
+                                                                        ▼
+                                                                  pattern_writer
 ```
 
 - `intake_parser` — extracts a structured spec (subject, size, body family, customizations) from free text and/or a reference image, via a single multimodal call to Claude — no separate vision model.
@@ -20,6 +27,7 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 - `shape_planner` — deterministic, no LLM. Converts the spec into concrete stitch counts per round, sourced from a curated knowledge base derived from real crochet patterns — not invented at generation time.
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
+- `refine_with_user` — the same `interrupt()` pattern as `clarify_with_user`, applied after the recipe is done: pauses to ask if the user wants any changes, loops back to `pattern_writer` with free-text feedback if so, ends otherwise. The front-end shows the finished recipe and the follow-up prompt at the same time, not one or the other.
 
 ### Module B — Project Assistant
 
@@ -65,6 +73,9 @@ The yarn calculator's natural signature takes a full recipe object — every par
 
 **Proving RAG is grounding the answer, not just running**
 Retrieval always executes — it's plain code, not something the model opts into — so "did it search?" is guaranteed by construction. The harder question is whether the model's answer actually uses what came back instead of its own training knowledge. Two forms of evidence, not just one: asking about a technique deliberately absent from the corpus (invisible decrease) and confirming the assistant admits it doesn't know rather than answering from memory; and pulling the exact trace from Langfuse to see the retrieved chunks sitting in the system prompt that produced a given answer.
+
+**A feature that mechanically works but honestly can't do everything it looks like it does**
+Reading a trace after testing the post-recipe editing loop turned up something worth stating plainly rather than glossing over: asking to change a structural choice (e.g. legs visible vs. a cone-shaped robe) doesn't actually change the construction technique — that decision was made once by `shape_planner` and the edit loop only revisits `pattern_writer`. The model complied by inserting a phrase into the instructions without changing the stitch math underneath, which reads as satisfied but isn't. Content-level edits within a part work correctly; edits that require re-deciding the body family don't yet, and that's tracked as a known gap rather than quietly accepted as done.
 
 ## Project Structure
 
