@@ -24,7 +24,7 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 
 - `intake_parser` — extracts a structured spec (subject, size, body family, customizations) from free text and/or a reference image, via a single multimodal call to Claude — no separate vision model.
 - `clarify_with_user` — a real pause, not a retry: when the body-family decision is ambiguous, the graph uses LangGraph's `interrupt()` to stop and ask the user, resuming exactly where it left off once a `Command(resume=...)` arrives.
-- `shape_planner` — deterministic, no LLM. Converts the spec into concrete stitch counts per round, sourced from a curated knowledge base derived from real crochet patterns — not invented at generation time.
+- `shape_planner` — deterministic, no LLM. Converts the spec into concrete stitch counts per round, sourced from a curated knowledge base derived from real crochet patterns — not invented at generation time. Also decides which optional parts to add (hat, simple clothing) from two explicit boolean fields the extraction step fills in, rather than fuzzy-matching the free-text customization list.
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 - `refine_with_user` — the same `interrupt()` pattern as `clarify_with_user`, applied after the recipe is done: pauses to ask if the user wants any changes, loops back to `pattern_writer` with free-text feedback if so, ends otherwise. The front-end shows the finished recipe and the follow-up prompt at the same time, not one or the other.
@@ -76,6 +76,9 @@ Retrieval always executes — it's plain code, not something the model opts into
 
 **A feature that mechanically works but honestly can't do everything it looks like it does**
 Reading a trace after testing the post-recipe editing loop turned up something worth stating plainly rather than glossing over: asking to change a structural choice (e.g. legs visible vs. a cone-shaped robe) doesn't actually change the construction technique — that decision was made once by `shape_planner` and the edit loop only revisits `pattern_writer`. The model complied by inserting a phrase into the instructions without changing the stitch math underneath, which reads as satisfied but isn't. Content-level edits within a part work correctly; edits that require re-deciding the body family don't yet, and that's tracked as a known gap rather than quietly accepted as done.
+
+**Adding customizations selectively, because not all of them fit the same validation model**
+The generator originally extracted customization requests (hat, clothing, hair) but never acted on them. Adding hat and clothing support was straightforward — both are round-by-round stitch progressions, the exact shape `PartPlan`/`validator` already checks. Hair isn't: it's a foundation chain plus individually knotted tufts, not an increasing round count, so forcing it into the same validated structure would mean inventing a stitch-count model the source material doesn't describe. It's left out on purpose, not by oversight — a mismatch between a feature request and the existing validation model is a reason to say so, not to paper over it with a number that doesn't mean anything.
 
 ## Project Structure
 
