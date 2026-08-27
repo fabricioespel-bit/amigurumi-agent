@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product for my wife, who makes amigurumi (crochet dolls), and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phases 0–3 of 6 are complete — domain research, the LangGraph generator module (Module A), a working React front-end consuming it end-to-end, and LLM observability via Langfuse. Phase 4 (Module B) is underway: the RAG corpus, ingestion, and hybrid retrieval are built and tested; the conversational graph and deterministic tools (yarn calculator, pattern scaler) are next.
+**Status: in progress.** Phases 0–4 of 6 are functionally complete — domain research, the LangGraph generator module (Module A) with a working React front-end, LLM observability via Langfuse, and the RAG-based project assistant (Module B) with tool-calling. What's left: exposing Module B through the API/front-end (it currently only runs via CLI), and deployment.
 
 ## Architecture
 
@@ -21,9 +21,20 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 
-### Module B — Project Assistant (retrieval built, conversation loop in progress)
+### Module B — Project Assistant
 
-RAG over a curated corpus of crochet techniques (14 chunks, one per technique, manually split along the source document's own sections rather than by fixed size) in Qdrant Cloud, embedded via Voyage AI (Anthropic's recommended pairing, since Claude has no native embedding endpoint). Retrieval is genuinely hybrid: a dense vector search and a keyword match over chunk tags are merged and deduplicated, then reranked by Voyage's cross-encoder reranker — the vector search alone surfaces plausible-looking but not-quite-right chunks; reranking is what actually fixes the ordering. Reference diagrams per technique are planned but not yet sourced. The conversational graph and deterministic tools (yarn calculator, pattern scaler) are the remaining piece.
+```
+call_model ─(no tool call)──→ end
+     ↑              │
+     │        (tool call)
+     └──── execute_tools
+```
+
+RAG over a curated corpus of crochet techniques (14 chunks, one per technique, manually split along the source document's own sections rather than by fixed size) in Qdrant Cloud, embedded via Voyage AI (Anthropic's recommended pairing, since Claude has no native embedding endpoint). Retrieval is genuinely hybrid: a dense vector search and a keyword match over chunk tags are merged and deduplicated, then reranked by Voyage's cross-encoder reranker — the vector search alone surfaces plausible-looking but not-quite-right chunks; reranking is what actually fixes the ordering.
+
+The assistant itself is a small LangGraph — the classic tool-calling agent loop (`call_model` ↔ `execute_tools`) — with two deterministic tools: estimating yarn length from stitch count, and suggesting a yarn-thickness swap to resize a piece without recomputing stitches. Retrieval isn't a tool the model chooses to call; it runs unconditionally in code before the model ever sees the question, so grounding is guaranteed by construction rather than by hoping the model calls a retrieval tool. Reference diagrams per technique are planned but not yet sourced.
+
+Not yet a StateGraph until tool-calling needed a real loop — the first version was a single retrieve-then-generate function, which was the right amount of complexity for what it did at the time.
 
 ### Observability (Langfuse)
 
@@ -49,6 +60,12 @@ Both Langfuse and Qdrant were originally scoped as self-hosted (closer to the "o
 **A production bug caught by reading the observability tool, not by guessing**
 A user report of a generic "failed to fetch" in the browser led nowhere by itself. Pulling the actual trace via Langfuse's API (not just its dashboard) showed exactly where it broke: Claude occasionally returns a structured-output field as a JSON-encoded string instead of a real list, which Pydantic rejects — an unhandled exception that took down the whole request. Fixed with a narrow `try/except` feeding the same retry path the validator already used, rather than a generic catch-all.
 
+**A tool's signature has to be fillable from a sentence, not just reusable from code**
+The yarn calculator's natural signature takes a full recipe object — every part, every round. That's the right shape when your own code calls it after generating a pattern, and the wrong shape for an LLM tool: the model can't infer a nested structure like that from "how much yarn do I need?" The tool-calling version takes a flat stitch count instead; the recipe-aware version stays for when a future feature hands the assistant an actual generated pattern to discuss.
+
+**Proving RAG is grounding the answer, not just running**
+Retrieval always executes — it's plain code, not something the model opts into — so "did it search?" is guaranteed by construction. The harder question is whether the model's answer actually uses what came back instead of its own training knowledge. Two forms of evidence, not just one: asking about a technique deliberately absent from the corpus (invisible decrease) and confirming the assistant admits it doesn't know rather than answering from memory; and pulling the exact trace from Langfuse to see the retrieved chunks sitting in the system prompt that produced a given answer.
+
 ## Project Structure
 
 ```
@@ -57,14 +74,16 @@ backend/
     main.py                    # FastAPI entrypoint — CORS, Langfuse callback wiring
     graphs/
       pattern_generator.py     # Module A — LangGraph StateGraph
-      assistant.py             # Module B — in progress
+      assistant.py             # Module B — LangGraph tool-calling loop
     knowledge/
       construction_rules.py    # deterministic crochet construction rules
     rag/
       corpus.py                # 14 curated technique chunks
       ingest.py                # embeddings (Voyage) + upsert to Qdrant
       retriever.py             # hybrid dense+keyword search with reranking
-    tools/                     # planned — yarn_calculator, pattern_scaler
+    tools/
+      yarn_calculator.py       # stitch-count -> yarn length estimate
+      pattern_scaler.py        # yarn-thickness swap for resizing
     models/                    # Pydantic schemas (spec, pattern)
   langgraph.json                # LangGraph Studio config
 frontend/
