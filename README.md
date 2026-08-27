@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product for my wife, who makes amigurumi (crochet dolls), and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phases 0–4 of 6 are functionally complete — domain research, the LangGraph generator module (Module A) with a working React front-end, LLM observability via Langfuse, and the RAG-based project assistant (Module B) with tool-calling. What's left: exposing Module B through the API/front-end (it currently only runs via CLI), and deployment.
+**Status: in progress.** Phases 0–5 of 6 are functionally complete — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, and a React front-end with a screen for each module, both exercised end-to-end in the browser. What's left: validating the product with its actual end user, and deployment.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ RAG over a curated corpus of crochet techniques (14 chunks, one per technique, m
 
 The assistant itself is a small LangGraph — the classic tool-calling agent loop (`call_model` ↔ `execute_tools`) — with two deterministic tools: estimating yarn length from stitch count, and suggesting a yarn-thickness swap to resize a piece without recomputing stitches. Retrieval isn't a tool the model chooses to call; it runs unconditionally in code before the model ever sees the question, so grounding is guaranteed by construction rather than by hoping the model calls a retrieval tool. Reference diagrams per technique are planned but not yet sourced.
 
-Not yet a StateGraph until tool-calling needed a real loop — the first version was a single retrieve-then-generate function, which was the right amount of complexity for what it did at the time.
+Not yet a StateGraph until tool-calling needed a real loop — the first version was a single retrieve-then-generate function, which was the right amount of complexity for what it did at the time. Exposed via `/api/assistant` and a chat-style front-end screen; each question is answered independently for now — the backend doesn't yet carry conversation memory across turns.
 
 ### Observability (Langfuse)
 
@@ -90,6 +90,7 @@ frontend/
   src/
     api/client.ts              # fetch calls to the backend
     pages/GeneratorPage.tsx    # form, human-in-the-loop UI, recipe display
+    pages/AssistantPage.tsx    # chat-style UI for the project assistant
     types.ts                   # TypeScript mirrors of the backend Pydantic models
 docs/
   regras-construcao-amigurumi.md   # curated domain knowledge base
