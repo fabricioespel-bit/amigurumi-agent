@@ -28,6 +28,7 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 - `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 - `refine_with_user` — the same `interrupt()` pattern as `clarify_with_user`, applied after the recipe is done: pauses to ask if the user wants any changes, loops back to `pattern_writer` with free-text feedback if so, ends otherwise. The front-end shows the finished recipe and the follow-up prompt at the same time, not one or the other.
+- `formatter` — also generates a reference illustration of the amigurumi (OpenAI image generation), once per thread, cached in graph state so the follow-up editing loop doesn't regenerate it on every small text edit.
 
 ### Module B — Project Assistant
 
@@ -80,6 +81,9 @@ Reading a trace after testing the post-recipe editing loop turned up something w
 **Adding customizations selectively, because not all of them fit the same validation model**
 The generator originally extracted customization requests (hat, clothing, hair) but never acted on them. Adding hat and clothing support was straightforward — both are round-by-round stitch progressions, the exact shape `PartPlan`/`validator` already checks. Hair isn't: it's a foundation chain plus individually knotted tufts, not an increasing round count, so forcing it into the same validated structure would mean inventing a stitch-count model the source material doesn't describe. It's left out on purpose, not by oversight — a mismatch between a feature request and the existing validation model is a reason to say so, not to paper over it with a number that doesn't mean anything.
 
+**A lossless format was the wrong default for a large generated image**
+The illustration feature's first working version stored PNG data straight from the image API — about 2.5MB of base64 sitting in graph state from that point on, which every downstream node (and every Langfuse trace of them) would then carry. PNG's lossless compression doesn't help much on this kind of image; switching to JPEG with explicit compression cut the same image to roughly 120KB with no visible quality loss for a UI thumbnail. The fix wasn't a smaller resolution — the model's API rejects the smaller sizes outright — it was choosing the right encoding for what the file is actually for.
+
 ## Project Structure
 
 ```
@@ -98,6 +102,7 @@ backend/
     tools/
       yarn_calculator.py       # stitch-count -> yarn length estimate
       pattern_scaler.py        # yarn-thickness swap for resizing
+      illustrator.py           # reference image generation (OpenAI)
     models/                    # Pydantic schemas (spec, pattern)
   langgraph.json                # LangGraph Studio config
 frontend/
@@ -120,6 +125,7 @@ docs/
 - **Dev tooling:** LangGraph Studio (local graph debugging)
 - **Vector DB:** Qdrant (Cloud) — hybrid dense+keyword retrieval with reranking
 - **Embeddings/Reranking:** Voyage AI (`voyage-3`, `rerank-2`)
+- **Image generation:** OpenAI (`gpt-image-1`) — reference illustration per recipe
 - **Deployment (planned):** Cloud Run · Docker
 
 ## Related Projects
