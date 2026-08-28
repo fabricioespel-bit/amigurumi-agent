@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product for my wife, who makes amigurumi (crochet dolls), and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phases 0–5 of 6 are functionally complete — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, and a React front-end with a screen for each module, both exercised end-to-end in the browser. What's left: validating the product with its actual end user, and deployment.
+**Status: in progress.** Phases 0–5 of 6 are functionally complete — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, and a React front-end with a screen for each module. Phase 6 — validating with the actual end user (my wife, an amigurumi crocheter) — is underway and already changing the product: real usage surfaced a silent failure mode and a real ambiguity in how clothing was represented, both fixed below. Deployment is what's left.
 
 ## Architecture
 
@@ -24,8 +24,8 @@ intake_parser ──(low confidence)──→ clarify_with_user ──(answer)�
 
 - `intake_parser` — extracts a structured spec (subject, size, body family, customizations) from free text and/or a reference image, via a single multimodal call to Claude — no separate vision model.
 - `clarify_with_user` — a real pause, not a retry: when the body-family decision is ambiguous, the graph uses LangGraph's `interrupt()` to stop and ask the user, resuming exactly where it left off once a `Command(resume=...)` arrives.
-- `shape_planner` — deterministic, no LLM. Converts the spec into concrete stitch counts per round, sourced from a curated knowledge base derived from real crochet patterns — not invented at generation time. Also decides which optional parts to add (hat, simple clothing) from two explicit boolean fields the extraction step fills in, rather than fuzzy-matching the free-text customization list.
-- `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part.
+- `shape_planner` — deterministic, no LLM. Converts the spec into concrete stitch counts per round, sourced from a curated knowledge base derived from real crochet patterns — not invented at generation time. Also decides which optional parts to add: a hat from a boolean field, and one separately named part per distinct clothing item the extraction step identifies (a vest and shorts become two labeled parts, not one generic "clothing" blob).
+- `pattern_writer` — writes the round-by-round recipe in Brazilian Portuguese crochet notation (pb, aum, dim...), one LLM call per body part. For any part built with the standalone attachment technique, it's instructed to say so explicitly — crocheted separately and sewn on afterward, not integrated into the body piece — so the recipe states the assembly method instead of leaving it for the reader to guess.
 - `validator` — recomputes the expected stitch count for every round and compares it against what the LLM wrote; on a mismatch, it routes back to `pattern_writer` with the specific error, up to a retry limit.
 - `refine_with_user` — the same `interrupt()` pattern as `clarify_with_user`, applied after the recipe is done: pauses to ask if the user wants any changes, loops back to `pattern_writer` with free-text feedback if so, ends otherwise. The front-end shows the finished recipe and the follow-up prompt at the same time, not one or the other.
 - `formatter` — also generates a reference illustration of the amigurumi (OpenAI image generation), once per thread, cached in graph state so the follow-up editing loop doesn't regenerate it on every small text edit.
@@ -83,6 +83,12 @@ The generator originally extracted customization requests (hat, clothing, hair) 
 
 **A lossless format was the wrong default for a large generated image**
 The illustration feature's first working version stored PNG data straight from the image API — about 2.5MB of base64 sitting in graph state from that point on, which every downstream node (and every Langfuse trace of them) would then carry. PNG's lossless compression doesn't help much on this kind of image; switching to JPEG with explicit compression cut the same image to roughly 120KB with no visible quality loss for a UI thumbnail. The fix wasn't a smaller resolution — the model's API rejects the smaller sizes outright — it was choosing the right encoding for what the file is actually for.
+
+**A real user found a failure mode that no amount of testing the API surfaced**
+The illustration call is deliberately silent on failure — cosmetic, shouldn't block a recipe — but silent turned out to mean invisible even to me: watching the raw JSON response during development, a missing image reads as "haven't tested this case yet," not as a failure. My wife's first real end-to-end use hit it as a recipe that simply had no picture, no error, nothing to click. Two fixes, neither of them about the image API itself: log the exception server-side instead of swallowing it, and have the front-end say "illustration unavailable this time" instead of rendering nothing — so a real failure and a feature that was never built look different to the person using it.
+
+**Naming beats a boolean when the answer isn't yes/no**
+A generated recipe for a character with both a vest and shorts produced one generic "Roupa" part covering both, with no line marking where one ended and the other began — because clothing was originally a single boolean flag, not a list of what was actually requested. Swapping `wants_clothing: bool` for `clothing_items: list[str]` let each named garment become its own labeled part, the same way the body already has separately named parts for head, body, and arms. The fix was recognizing that a "did the user want clothing" question was hiding a "which pieces of clothing" question underneath.
 
 ## Project Structure
 
