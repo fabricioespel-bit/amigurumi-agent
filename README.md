@@ -90,6 +90,9 @@ The illustration call is deliberately silent on failure — cosmetic, shouldn't 
 **Naming beats a boolean when the answer isn't yes/no**
 A generated recipe for a character with both a vest and shorts produced one generic "Roupa" part covering both, with no line marking where one ended and the other began — because clothing was originally a single boolean flag, not a list of what was actually requested. Swapping `wants_clothing: bool` for `clothing_items: list[str]` let each named garment become its own labeled part, the same way the body already has separately named parts for head, body, and arms. The fix was recognizing that a "did the user want clothing" question was hiding a "which pieces of clothing" question underneath.
 
+**Color as a qualitative zone, not a number the deterministic validator can check**
+The same end-user validation surfaced two related gaps: recipes had no color information at all, and — the harder case — no marked point for switching colors mid-piece (e.g. a limb that's brown except for white paws at the tip). Colors are captured at intake as zones (`part`, `color`, `position`: whole piece / start / end), with a `"geral"` fallback for the default color of everything else. `pattern_writer` turns that into a per-part instruction, and when a part has more than one zone it explicitly tells the model to mark the exact round of the transition and work it in BLO (back-loop-only) for a clean line — reusing a technique already documented from the source patterns, not invented for this feature. The honest limitation: unlike stitch counts, the chosen transition round isn't deterministically checked — the `validator` verifies geometry, not color placement, so a mismatched round would currently pass silently. Registered as a known gap rather than quietly assumed correct.
+
 ## Project Structure
 
 ```
