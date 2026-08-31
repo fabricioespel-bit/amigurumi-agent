@@ -2,7 +2,7 @@
 
 A personal project with a dual purpose: a real product and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
 
-**Status: in progress.** Phases 0–5 of 6 are functionally complete — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, and a React front-end with a screen for each module. Phase 6 — validating with a real end user (an amigurumi crocheter) — is underway and already changing the product: real usage surfaced a silent failure mode and a real ambiguity in how clothing was represented, both fixed below. Deployment is what's left.
+**Status: feature-complete.** All 6 phases are done — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, a React front-end with a screen for each module, a full round of real end-user validation (an amigurumi crocheter) with every finding fixed, and a working Cloud Run deployment pipeline (Docker, Secret Manager, a shared-password gate). The deployed services are intentionally spun down between real usage sessions rather than left running continuously — a personal, single-user app doesn't need to pay for idle compute, and redeploying takes minutes.
 
 ## Architecture
 
@@ -107,6 +107,15 @@ The illustration prompt only ever used `subject` and free-text `customizations` 
 **Removing a promise the product never kept**
 The form's placeholder text suggested a size in centimeters, but no field or logic anywhere ever used it — every recipe is generated at one fixed size regardless of what's typed. Once a second round of real usage flagged the mismatch, the fix wasn't to build size scaling; it was to stop implying a feature that didn't exist. Saying "one fixed size" honestly was better than a placeholder promising a knob that silently did nothing.
 
+**Deploying surfaced problems no amount of local testing could have, because there was no local Docker to test against**
+Docker Desktop doesn't run on this machine's macOS version — the same wall hit earlier with Qdrant and Langfuse — so the Dockerfiles went straight to a real cloud build with no local dry run. Two failures only showed up there: Cloud Build's network couldn't reliably reach `ghcr.io` to pull a build tool image, fixed by installing it via `pip` instead of a cross-registry `COPY --from`; and `gcloud run deploy --source`'s build-time environment variables don't reach a plain Dockerfile build the way they do a buildpack build, so a frontend that embedded its backend URL at build time silently shipped pointing at itself. The fix was to stop treating that URL as a build-time constant at all — a small entrypoint script writes it into a `config.js` from a real runtime environment variable, the same mechanism the backend already used for its secrets, so the value only has to be right once, at container start, not baked into a JS bundle.
+
+**The LangGraph checkpointer's storage choice becomes a deployment decision, not just a dev-time one**
+`InMemorySaver` was the right call for local development — zero setup, no infra. In Cloud Run, an in-memory checkpointer only works if every request for a given `thread_id` lands on the same container instance, which isn't guaranteed once a service can scale past one replica. Rather than introduce a persistent store (Postgres/SQLite-backed checkpointer) for what is, for now, a single real user, the service is pinned to exactly one instance (`min=1, max=1, concurrency=1`) — an explicit, disclosed trade-off between infrastructure complexity and correctness that would need revisiting if this ever served more than one household.
+
+**A shared password is a cost control, not a security feature — and that distinction shaped where it applies**
+Every call to the pattern generator or assistant costs real money across four paid APIs, so a publicly reachable backend needed some barrier before a crawler or a leaked link could run up a bill. A single shared password header does that cheaply. It deliberately does *not* protect the PDF export endpoint: that route calls no paid API at all, and the download button uses a plain `<a href>` (to sidestep CORS) that can't attach a custom header anyway — protecting a free, local-only operation would have added real frontend complexity for no matching risk.
+
 ## Project Structure
 
 ```
@@ -149,7 +158,7 @@ docs/
 - **Vector DB:** Qdrant (Cloud) — hybrid dense+keyword retrieval with reranking
 - **Embeddings/Reranking:** Voyage AI (`voyage-3`, `rerank-2`)
 - **Image generation:** OpenAI (`gpt-image-1`) — reference illustration per recipe
-- **Deployment (planned):** Cloud Run · Docker
+- **Deployment:** Cloud Run · Docker · Secret Manager — spun up on demand, not left running continuously
 
 ## Related Projects
 
