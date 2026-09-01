@@ -1,8 +1,8 @@
 # Amigurumi Agent
 
-A personal project with a dual purpose: a real product and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Two modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, and a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions.
+A personal project with a dual purpose: a real product and an exploration of **LangGraph** orchestration, **RAG** with a dedicated vector database, and **LLM observability** — gaps not covered by my other portfolio projects, which lean on Google ADK and managed RAG. Three modules: a **pattern generator** that produces a custom amigurumi recipe from a text description and/or a reference photo, a **project assistant** that helps someone already crocheting — adapting patterns, converting techniques, calculating yarn, answering technique questions — and an **MCP server** that exposes the assistant's own tools to any compatible client, not just this project's own front-end.
 
-**Status: feature-complete.** All 6 phases are done — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, a React front-end with a screen for each module, a full round of real end-user validation (an amigurumi crocheter) with every finding fixed, and a working Cloud Run deployment pipeline (Docker, Secret Manager, a shared-password gate). The deployed services are intentionally spun down between real usage sessions rather than left running continuously — a personal, single-user app doesn't need to pay for idle compute, and redeploying takes minutes.
+**Status: feature-complete.** All 6 original phases are done — domain research, both LangGraph modules (pattern generator and project assistant, the latter with tool-calling and hybrid RAG), LLM observability via Langfuse, a React front-end with a screen for each module, a full round of real end-user validation (an amigurumi crocheter) with every finding fixed, and a working Cloud Run deployment pipeline (Docker, Secret Manager, a shared-password gate). An MCP server (Module C, below) was added afterward, independent of the original 6-phase scope, exposing the assistant as tools any MCP client can call. The deployed services are intentionally spun down between real usage sessions rather than left running continuously — a personal, single-user app doesn't need to pay for idle compute, and redeploying takes minutes.
 
 ## Architecture
 
@@ -44,6 +44,16 @@ RAG over a curated corpus of crochet techniques (14 chunks, one per technique, m
 The assistant itself is a small LangGraph — the classic tool-calling agent loop (`call_model` ↔ `execute_tools`) — with two deterministic tools: estimating yarn length from stitch count, and suggesting a yarn-thickness swap to resize a piece without recomputing stitches. Retrieval isn't a tool the model chooses to call; it runs unconditionally in code before the model ever sees the question, so grounding is guaranteed by construction rather than by hoping the model calls a retrieval tool. Reference diagrams per technique are planned but not yet sourced.
 
 Not yet a StateGraph until tool-calling needed a real loop — the first version was a single retrieve-then-generate function, which was the right amount of complexity for what it did at the time. Exposed via `/api/assistant` and a chat-style front-end screen; each question is answered independently for now — the backend doesn't yet carry conversation memory across turns.
+
+### Module C — MCP Server
+
+Wraps Module B's already-built tools (`answer_question`, `calculate_yarn`, `suggest_thickness_change`) as MCP tools, discoverable and callable by any MCP-compatible client — Claude Desktop, an IDE, or a completely different agent — not just this project's own front-end. No new logic: the assistant's LangChain `@tool`-wrapped functions are unwrapped via `.func` and registered directly, so the MCP layer is purely an interoperability boundary over code that already existed and was already tested.
+
+Module A was deliberately left out of this layer: its `interrupt()`-based human-in-the-loop flow doesn't map onto MCP's request/response tool-call model without real redesign, while Module B's tools are already stateless, single-call operations — the natural fit came first.
+
+Authentication uses the SDK's own extension point (`TokenVerifier` + `AuthSettings`) rather than a custom auth middleware: this service acts purely as an OAuth *resource server*, verifying a pre-shared bearer token, with no authorization server, login flow, or per-user identity behind it — a deliberately smaller, differently-shaped piece of the OAuth split than a full "login with Google" authorization server, appropriate for a single-operator tool rather than a multi-tenant one.
+
+Deployed as its own Cloud Run service (separate from the REST backend), reusing the same secrets and the same single-instance pinning rationale — the streamable-HTTP transport keeps session state in memory the same way the LangGraph checkpointer does.
 
 ### Observability (Langfuse)
 
@@ -116,6 +126,12 @@ Docker Desktop doesn't run on this machine's macOS version — the same wall hit
 **A shared password is a cost control, not a security feature — and that distinction shaped where it applies**
 Every call to the pattern generator or assistant costs real money across four paid APIs, so a publicly reachable backend needed some barrier before a crawler or a leaked link could run up a bill. A single shared password header does that cheaply. It deliberately does *not* protect the PDF export endpoint: that route calls no paid API at all, and the download button uses a plain `<a href>` (to sidestep CORS) that can't attach a custom header anyway — protecting a free, local-only operation would have added real frontend complexity for no matching risk.
 
+**Interoperability as a design goal, not an afterthought — and a reason to build it a second time, differently**
+An MCP server for a Python agent already existed in a separate, private context, built to a company-internal pattern without full ownership of every design decision in it — a real gap in what could actually be shown as portfolio work, since that code isn't shareable. This project's MCP server is a from-scratch redesign of the same underlying skill rather than a copy: same protocol, deliberately different shape. The earlier version was a full OAuth *authorization server* (its own login-with-Google flow, its own session tokens); this one is only the *resource server* half — verifying a pre-shared token via the SDK's `TokenVerifier` extension point, with no login flow behind it. Two legitimate ways to secure an MCP server, chosen for different situations: multi-user identity in one case, a single operator's own tool in the other — and understanding the distinction well enough to pick deliberately, rather than defaulting to whichever pattern was seen first, is the actual point.
+
+**A protocol server exposed a class of bug curl-testing an internal API never would**
+Two failures only appeared once a real MCP client (not `curl`, not a unit test) tried to talk to the deployed server over the network. First, the SDK's built-in DNS-rebinding protection rejects every request with a 421 until the real hostname is explicitly allow-listed — `allowed_hosts` defaults to empty, which means "trust nothing," not "trust everything," and the failure mode gives no hint that host validation is the cause. Second, the container's own health check started timing out after a code change that had nothing to do with health checks: the `CMD` used `uv run uvicorn ...`, which re-validates the environment against the *entire* `pyproject.toml` — including the dev dependency group — on every container start, even though the image was already built with `uv sync --frozen --no-dev`. A production container has no business re-resolving anything at startup; calling the pre-built virtualenv's binary directly instead of routing through `uv run` removed an entire class of runtime surprise, and the fix applied to both Cloud Run services once found in one.
+
 ## Project Structure
 
 ```
@@ -125,6 +141,10 @@ backend/
     graphs/
       pattern_generator.py     # Module A — LangGraph StateGraph
       assistant.py             # Module B — LangGraph tool-calling loop
+    mcp/
+      server.py                # Module C — MCP server, reuses Module B's tools
+      auth.py                  # TokenVerifier — resource server, no login flow
+      main.py                  # ASGI entrypoint (separate Cloud Run service)
     knowledge/
       construction_rules.py    # deterministic crochet construction rules
     rag/
@@ -158,6 +178,7 @@ docs/
 - **Vector DB:** Qdrant (Cloud) — hybrid dense+keyword retrieval with reranking
 - **Embeddings/Reranking:** Voyage AI (`voyage-3`, `rerank-2`)
 - **Image generation:** OpenAI (`gpt-image-1`) — reference illustration per recipe
+- **Interoperability:** MCP (Model Context Protocol) — official Python SDK, resource-server auth, streamable-HTTP transport
 - **Deployment:** Cloud Run · Docker · Secret Manager — spun up on demand, not left running continuously
 
 ## Related Projects
