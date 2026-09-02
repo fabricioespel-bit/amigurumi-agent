@@ -187,3 +187,4 @@ docs/
 ## Related Projects
 
 - [multi-agent-analytics](https://github.com/fabricioespel-bit/multi-agent-analytics) — a separate personal project exploring agent orchestration with Google ADK; this one deliberately explores LangGraph instead, to diversify the same underlying skill across frameworks
+- [finops-llm-routing](https://github.com/fabricioespel-bit/finops-llm-routing) — a cost-optimization case study run directly against this project's three Claude call sites: which node moved to a cheaper model, which didn't, and the real bug a naive swap would have shipped silently
